@@ -17,9 +17,9 @@ import matplotlib.pyplot as plt
 
 from statsmodels.graphics.tsaplots import plot_acf
 from datetime import date
-import multiprocessing
+from itertools import repeat
+from multiprocessing import Pool, freeze_support
 
-import progressbar
 import math
 
 
@@ -435,7 +435,7 @@ def Greeks(S0, K, r, sig, dt,q):
  ####   HS_Bootstrap_Full_Reval          #TODO historical simulation with full revaluation
 
 def Bootstrap(port_weights):
-
+    np.random.seed()
     # define parameters
 
     alpha = 0.95
@@ -525,7 +525,7 @@ def Bootstrap(port_weights):
     ES = ten_day_sim_ret[ten_day_sim_ret < -sim_HS_full_Val]
     sim_HS_full_Val_ES = -np.mean(ES)
 
-    return sim_HS_full_Val, sim_HS_full_Val_ES, ten_day_sim_ret
+    return sim_HS_full_Val, sim_HS_full_Val_ES, ten_day_sim_ret, ten_day_port_value_w_opt, last_day_port_w_opt
 
 
 def HS_Bootstrap_Full_Val_w_Opt(epsilon, port_weights, CVar_weights):
@@ -533,20 +533,12 @@ def HS_Bootstrap_Full_Val_w_Opt(epsilon, port_weights, CVar_weights):
     second_arg = port_weights
 
     # repeat bootstrap for B times to generate B many simulated VaR and ES
-    HS_full_B_list = []
-    HS_full_ES_B_list = []
-
-    B = 10000
 
     #### run Bootstrap here parallerised ###### TODO
-
-    pool = multiprocessing.Pool(4)
-
-    sim_HS_full_Val, sim_HS_full_Val_ES, ten_day_sim_ret = zip(*pool.map(Bootstrap,second_arg))
-
+    with Pool() as pool:
+        sim_HS_full_Val, sim_HS_full_Val_ES, ten_day_sim_ret, ten_day_port_value_w_opt, last_day_port_w_opt = pool.starmap(Bootstrap, zip(range(B), repeat(second_arg)))
 
     ##############      END        ############
-
     HS_full_Val = np.mean(sim_HS_full_Val)
     HS_full_Val_ES = np.mean(sim_HS_full_Val_ES)
 
