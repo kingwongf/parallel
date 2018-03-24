@@ -19,6 +19,10 @@ from statsmodels.graphics.tsaplots import plot_acf
 from datetime import date
 from itertools import repeat
 from multiprocessing import Pool, freeze_support
+import os
+
+
+os.system("taskset -p 0xff %d" % os.getpid())
 
 import math
 
@@ -159,11 +163,13 @@ def Ret_Analysis(ret):
 
 def Variance_Ratio_Test(a, n):
     var_one_period = np.var(a)
-    ret_nth_period = a[0::n]
+    ret_nth_period =[]
+    for i in np.arange(0,len(a),n):
+        ret_nth_period.append(np.sum(a[i:i+n]))
     var_nth_period =np.var(ret_nth_period)
     var_ratio = var_nth_period/(n*var_one_period)
     z_var_ratio = (var_ratio - 1) / np.sqrt((2*(n-1))/(len(a)*n))
-    print('z_var_ratio = ',z_var_ratio )
+    print('z_var_ratio = ',z_var_ratio)
 
     return z_var_ratio
 
@@ -434,7 +440,8 @@ def Greeks(S0, K, r, sig, dt,q):
 
  ####   HS_Bootstrap_Full_Reval          #TODO historical simulation with full revaluation
 
-def Bootstrap(port_weights):
+def Bootstrap(B, port_weights):
+    # random seed
     np.random.seed()
     # define parameters
 
@@ -525,57 +532,60 @@ def Bootstrap(port_weights):
     ES = ten_day_sim_ret[ten_day_sim_ret < -sim_HS_full_Val]
     sim_HS_full_Val_ES = -np.mean(ES)
 
-    return sim_HS_full_Val, sim_HS_full_Val_ES, ten_day_sim_ret, ten_day_port_value_w_opt, last_day_port_w_opt
+    return sim_HS_full_Val
 
 
-def HS_Bootstrap_Full_Val_w_Opt(epsilon, port_weights, CVar_weights):
+def HS_Bootstrap_Full_Val_w_Opt(epsilon, port_weights, CVar_weights, Best_Hedge):
 
     second_arg = port_weights
 
     # repeat bootstrap for B times to generate B many simulated VaR and ES
+    B = 1000
 
     #### run Bootstrap here parallerised ###### TODO
     with Pool() as pool:
-        sim_HS_full_Val, sim_HS_full_Val_ES, ten_day_sim_ret, ten_day_port_value_w_opt, last_day_port_w_opt = pool.starmap(Bootstrap, zip(range(B), repeat(second_arg)))
+        sim_HS_full_Val = pool.starmap(Bootstrap, zip(range(B), repeat(second_arg)))
+
+    HS_full_Val = np.mean(sim_HS_full_Val)
 
     ##############      END        ############
-    HS_full_Val = np.mean(sim_HS_full_Val)
-    HS_full_Val_ES = np.mean(sim_HS_full_Val_ES)
+    # HS_full_Val_ES = np.mean(sim_HS_full_Val_ES)
 
-    ############     Calculate Marginal VaR and Conditional VaR of HS Full Revaluation    #########
+    if Best_Hedge ==0:
+        ############     Calculate Marginal VaR and Conditional VaR of HS Full Revaluation    #########
 
 
-    ten_day_sim_port_ret_HS = ten_day_sim_ret   # simulated portfolio returns
-    HS_full_Val_VaR = HS_full_Val               # calculated VaR
-    ten_day_sim_sec_ret_HS = np.log(np.divide(ten_day_port_value_w_opt, last_day_port_w_opt)) # calculate simulated securities returns
+        ten_day_sim_port_ret_HS = ten_day_sim_ret   # simulated portfolio returns
+        HS_full_Val_VaR = HS_full_Val               # calculated VaR
+        ten_day_sim_sec_ret_HS = np.log(np.divide(ten_day_port_value_w_opt, last_day_port_w_opt)) # calculate simulated securities returns
 
-    l = []  # create a new list for MVaR
+        l = []  # create a new list for MVaR
 
-    # Conditioning on portfolio returns between -VaR - epsilon and -VaR + epsilon, return list of conditioned simulated securities returns
-    for i in range(0,len(ten_day_sim_port_ret_HS)):
-        if (-HS_full_Val_VaR - epsilon) <= ten_day_sim_port_ret_HS[i] <= (-HS_full_Val_VaR + epsilon):
-            l.append(ten_day_sim_sec_ret_HS[i])
-    l = np.asarray(l)
+        # Conditioning on portfolio returns between -VaR - epsilon and -VaR + epsilon, return list of conditioned simulated securities returns
+        for i in range(0,len(ten_day_sim_port_ret_HS)):
+            if (-HS_full_Val_VaR - epsilon) <= ten_day_sim_port_ret_HS[i] <= (-HS_full_Val_VaR + epsilon):
+                l.append(ten_day_sim_sec_ret_HS[i])
+        l = np.asarray(l)
 
-    # the means of the conditioned securities returns are the MVaR of each security
-    MVaR = -np.mean(l, axis = 0 )
+        # the means of the conditioned securities returns are the MVaR of each security
+        MVaR = -np.mean(l, axis = 0 )
 
-    # cauclate the percentage weights of each security holdings
-    sum_weights = np.sum(CVar_weights)
-    percent_weights = np.divide(CVar_weights, sum_weights)
+        # cauclate the percentage weights of each security holdings
+        sum_weights = np.sum(CVar_weights)
+        percent_weights = np.divide(CVar_weights, sum_weights)
 
-    # multiply MVaR by percentage weights returns CVaR
-    CVaR = np.multiply(MVaR, percent_weights)
+        # multiply MVaR by percentage weights returns CVaR
+        CVaR = np.multiply(MVaR, percent_weights)
 
-    # print out MVaR and CVaR of each security
-    name = np.array(["VZ","INTC","JPM","AAPL","MSFT","PG","AAPL opt", "MSFT opt","PG opt"])
-    MCVaR = {'MVaR':MVaR, 'CVaR':CVaR}
+        # print out MVaR and CVaR of each security
+        name = np.array(["VZ","INTC","JPM","AAPL","MSFT","PG","AAPL opt", "MSFT opt","PG opt"])
+        MCVaR = {'MVaR':MVaR, 'CVaR':CVaR}
 
-    # print(pd.DataFrame(data=MCVaR, index=name))       # TODO printing out MVaR and CVaR
+        # print(pd.DataFrame(data=MCVaR, index=name))       # TODO printing out MVaR and CVaR
+        return HS_full_Val_VaR, HS_full_Val_ES, MVaR, CVaR
+    else:
 
-    print(HS_full_Val_VaR, HS_full_Val_ES, MVaR, CVaR)
-
-    return HS_full_Val_VaR, HS_full_Val_ES, MVaR, CVaR
+        return HS_full_Val
 
 ###########  HS Boostrap with Delta and Gamma       #######TODO Historical Simualtion with Greeks Approximation
 
@@ -728,8 +738,9 @@ def Best_Hedge(dw, FullorGreeks):
         ES_dw = []
 
         # the security weight is increased by step of dw, returning VaR, ES and MVaR in each iteration
-        for i in np.arange(0,10,dw):
-            # two number of holding arrays are held, one with signs indicating long and short positions
+        for i in np.arange(-10,10,dw):
+            # two number of holding arrays are held, port_weights with signs indicating long and short positions
+            # , CVaR_weights with absolute weights
             port_weights = np.array([20, 10, 10, 10, 4, -5, -7, 6, 10])
             CVaR_weights = np.array([20, 10, 10, 10, 4, 5, 7, 6, 10])
 
@@ -744,22 +755,23 @@ def Best_Hedge(dw, FullorGreeks):
             # boolean control of calculating Historical Simulation Full Valuation
             # or Historical Simulation Greeks Approximation
             if FullorGreeks == 1:
-                [VaR, ES, MVaR, CVaR] =  HS_Bootstrap_Full_Val_w_Opt(0.99, 0.005, 10, 1000, port_weights, CVaR_weights)
+                VaR = HS_Bootstrap_Full_Val_w_Opt(0.005, port_weights, CVaR_weights, 1)
             else:
                 [VaR, ES, MVaR, CVaR] = HS_Bootstrap_Greek_App(0.99, 0.005, 10, 1000, port_weights, CVaR_weights)
             # append VaR, ES and MVaR for each step of dw
             VaR_dw.append(VaR)
-            ES_dw.append(ES)
-            MVaR_dw.append(MVaR)
-
-        plt.scatter(np.arange(0,10,dw),VaR_dw, label='VaR')
-        plt.scatter(np.arange(0,10,dw),ES_dw, label='ES')
+            # ES_dw.append(ES)
+            # MVaR_dw.append(MVaR)
+        # VaR_dw = [x for x in VaR_dw if str(x) != 'nan']
+        # VaR_dw = VaR_dw[~np.isnan(VaR_dw)]
+        min_VaR = np.nanmin(VaR_dw)
+        min_dw = VaR_dw.index(np.nanmin(VaR_dw))
+        plt.scatter(np.arange(-10,10,dw),VaR_dw, label='VaR', s= 1.0)
+        # plt.scatter(np.arange(0,10,dw),ES_dw, label='ES')
         plt.legend()
         plt.xlabel('Δw')
         plt.ylabel('Return')
-        plt.show()
-
-
+        plt.savefig("Fig"+str((n, " ", min_VaR," ", min_dw))+".png")
 
 
 def main():
@@ -771,7 +783,7 @@ def main():
     # Ret_Analysis(port_return)
 
     ## Return Autocorrelation test
-    # Variance_Ratio_Test(port_return, 10000)
+    Variance_Ratio_Test(port_return, 250)
 
     ## 1 day period return
 
@@ -827,11 +839,14 @@ def main():
     # rate_aapl = 0.0168324 + (call_aapl_days - 60) * (0.0181050 - 0.0168324) / (90 - 60)
     # print(Greeks(156.410004, 140, 0.0168324, 0.3954, 51/250, 0))
 
-    Best_Hedge(0.1,0)
+    # Best_Hedge(0.1, 1)
 
     print("--- %s seconds ---" % (time.time() - start_time))
 
-main()
+if __name__ == '__main__':
+    freeze_support()
+    main()
+
 
 
 
